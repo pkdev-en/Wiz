@@ -32,14 +32,19 @@ def make_boot(target):
 def runtime_for(target):
     """runtime.asm with the lines tagged for the other LCD type removed."""
     drop = ';@1p' if target.planes == 2 else ';@2p'
-    out = []
+    out = ['_ROWS EQU %d' % target.rows]
     for line in open(os.path.join(HERE, 'runtime.asm')).read().split('\n'):
         if line.rstrip().endswith(drop):
             continue
         if line.rstrip().endswith(';@seg') and not target.rom_seg:
             continue
+        if line.rstrip().endswith(';@off'):
+            if not target.row_off:
+                continue
+            line = line.replace('#32 ;@off', '#%d ;@off' % (32 * target.row_off))
         out.append(line)
     return '\n'.join(out)
+
 
 
 def build_source(src, target=None, path=None):
