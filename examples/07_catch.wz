@@ -1,0 +1,50 @@
+# Bat cham: mui ten di chuyen o vuong, an cham de tang diem. (Co trong GUIDE.md muc 16)
+const TOP = 8
+const W = 192
+const H = 64
+const S = 6               # cạnh ô vuông của bạn
+const D = 4               # cạnh chấm
+
+px = 90
+py = 36
+cx = 0
+cy = 0
+score = 0
+
+def new_dot():
+    global cx, cy
+    cx = 4 + rand(W - 8 - D)
+    cy = TOP + 4 + rand(H - TOP - 8 - D)
+
+def touching():
+    # hai hình chữ nhật có chồng lên nhau không?
+    if px + S <= cx or cx + D <= px:
+        return 0
+    if py + S <= cy or cy + D <= py:
+        return 0
+    return 1
+
+def main():
+    global px, py, score
+    srand(3)
+    new_dot()
+    buffered(1)
+    while True:
+        if key_down(K_LEFT):
+            px = max(px - 2, 1)
+        if key_down(K_RIGHT):
+            px = min(px + 2, W - S - 1)
+        if key_down(K_UP):
+            py = max(py - 2, TOP + 1)
+        if key_down(K_DOWN):
+            py = min(py + 2, H - S - 1)
+        if touching():
+            score += 1
+            new_dot()
+        clear()
+        rect(0, TOP, W, H - TOP)
+        fillrect(px, py, S, S)
+        rect(cx, cy, D, D)
+        print(4, TOP + 3, "Score ", score)
+        flip()
+        delay(4)
