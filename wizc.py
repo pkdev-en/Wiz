@@ -1620,10 +1620,16 @@ def lex(src):
     indents = [0]
     for ln, raw in enumerate(src.replace('\r', '').split('\n'), 1):
         line = strip_comment(raw).rstrip()
+        # convert leading tabs to 4 spaces each so tab-indented files work
+        expanded = []
+        for ch in line:
+            if ch == '\t':
+                expanded.append('    ')
+            else:
+                expanded.append(ch)
+        line = ''.join(expanded)
         if not line.strip():
             continue
-        if '\t' in line[:len(line) - len(line.lstrip())]:
-            raise WizError('tabs are not allowed for indentation, use spaces', ln)
         ind = len(line) - len(line.lstrip(' '))
         if ind > indents[-1]:
             indents.append(ind)

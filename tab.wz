@@ -1,0 +1,7 @@
+for cw
+clear()
+def hello(a):
+    if a == "hello":
+        print(1, 1, "hello")
+
+hello("hello")
