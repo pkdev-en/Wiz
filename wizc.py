@@ -27,7 +27,17 @@ ROM_LIMIT = 0x9000
 BUILTINS = {'pixel': (2, 3), 'clear': (0, 0), 'key': (0, 0), 'delay': (1, 1),
             'peek': (1, 1), 'poke': (2, 2), '_hspan': (4, 4),
             'key_down': (1, 1), 'key_hit': (1, 1), 'buffered': (1, 1), 'flip': (0, 0),
-            '_rpeek': (1, 1), 'exit': (0, 0)}
+            '_rpeek': (1, 1), 'exit': (0, 0),
+            # Timer0 (libcw __delay): native asm - the TM0 read/start dance is
+            # intricate; the RTC itself is PRELUDE (see PRELUDE['rtc'])
+            'ticks': (0, 0), 'delay_ms': (1, 1),
+            # graphics extra
+            'getpixel': (2, 2),
+            'copy_rect': (6, 6), 'invert_rect': (4, 4), 'clear_rect': (4, 4),
+            # heap byte access (alloc/free and the RAM file system f_save/... are
+            # PRELUDE Wiz code over the DYNAMIC heap - see PRELUDE['word']/['alloc']/['free']/['file'])
+            '_hpeek': (1, 1), '_hpoke': (2, 2),
+            }
 KEYWORDS = {'def', 'if', 'elif', 'else', 'while', 'for', 'in', 'range', 'return', 'break',
             'continue', 'pass', 'global', 'and', 'or', 'not', 'True', 'False', 'const', 'rom', 'rom8'}
 
@@ -46,6 +56,10 @@ KEY_CONSTS = {
     'K_LPAREN': 0x1C, 'K_RPAREN': 0x14,
     'K_DEL': 0x25, 'K_AC': 0x1D, 'K_MUL': 0x26, 'K_DIV': 0x1E,
     'K_PLUS': 0x27, 'K_MINUS': 0x1F,
+    # K_NEG: on cw this is the real (-) key next to the digits; on cwii there is
+    # no separate change-sign key, so the name aliases the minus key. Lets shared
+    # PRELUDE code accept the natural "make negative" key on both machines.
+    'K_NEG': 0x1F,
     'K_DOT': 0x0C, 'K_SCI': 0x0D, 'K_FORMAT': 0x0E, 'K_EXE': 0x0F,
 }
 
@@ -128,33 +142,37 @@ def wait_key():
 ''',
     'hline': '''
 def hline(x0, x1, y, c=1):
-    if y < 0 or y > 63:
+    if y < peek(0xE803) or y >= peek(0xE804):
         return 0
-    if x0 < 0:
-        x0 = 0
-    if x1 > 192:
-        x1 = 192
+    a = peek(0xE801)
+    b = peek(0xE802)
+    if x0 < a:
+        x0 = a
+    if x1 > b:
+        x1 = b
     if x0 >= x1:
         return 0
     _hspan(x0, x1, y, c != 0)
 ''',
     'vline': '''
 def vline(x, y0, y1, c=1):
-    if x < 0 or x > 191:
+    if x < peek(0xE801) or x >= peek(0xE802):
         return 0
-    if y0 < 0:
-        y0 = 0
-    if y1 > 64:
-        y1 = 64
+    a = peek(0xE803)
+    b = peek(0xE804)
+    if y0 < a:
+        y0 = a
+    if y1 > b:
+        y1 = b
     for y in range(y0, y1):
         pixel(x, y, c)
 ''',
     'rect': '''
-def rect(x, y, w, h, c=1):
-    hline(x, x + w, y, c)
-    hline(x, x + w, y + h - 1, c)
-    vline(x, y, y + h, c)
-    vline(x + w - 1, y, y + h, c)
+def rect(x, y, w, h, c=1, thick=1, dash=255):
+    line(x, y, x + w - 1, y, c, thick, dash)
+    line(x, y + h - 1, x + w - 1, y + h - 1, c, thick, dash)
+    line(x, y, x, y + h - 1, c, thick, dash)
+    line(x + w - 1, y, x + w - 1, y + h - 1, c, thick, dash)
 ''',
     'fillrect': '''
 def fillrect(x, y, w, h, c=1):
@@ -162,7 +180,7 @@ def fillrect(x, y, w, h, c=1):
         hline(x, x + w, j, c)
 ''',
     'line': '''
-def line(x0, y0, x1, y1, c=1):
+def line(x0, y0, x1, y1, c=1, thick=1, dash=255):
     dx = abs(x1 - x0)
     dy = 0 - abs(y1 - y0)
     sx = 1
@@ -172,8 +190,21 @@ def line(x0, y0, x1, y1, c=1):
     if y0 > y1:
         sy = -1
     err = dx + dy
+    ph = 0
     while True:
-        pixel(x0, y0, c)
+        bit = 128 >> (ph & 7)
+        if dash & bit:
+            if thick <= 1:
+                pixel(x0, y0, c)
+            else:
+                t = 0 - (thick / 2)
+                while t < thick - (thick / 2):
+                    if abs(dx) >= abs(dy):
+                        pixel(x0, y0 + t, c)
+                    else:
+                        pixel(x0 + t, y0, c)
+                    t += 1
+        ph += 1
         if x0 == x1 and y0 == y1:
             break
         e2 = err + err
@@ -185,19 +216,36 @@ def line(x0, y0, x1, y1, c=1):
             y0 += sy
 ''',
     'circle': '''
-def circle(cx, cy, r, c=1):
+def circle(cx, cy, r, c=1, thick=1, dash=255):
     x = r
     y = 0
     err = 1 - r
+    ph = 0
     while x >= y:
-        pixel(cx + x, cy + y, c)
-        pixel(cx + y, cy + x, c)
-        pixel(cx - y, cy + x, c)
-        pixel(cx - x, cy + y, c)
-        pixel(cx - x, cy - y, c)
-        pixel(cx - y, cy - x, c)
-        pixel(cx + y, cy - x, c)
-        pixel(cx + x, cy - y, c)
+        bit = 128 >> (ph & 7)
+        if dash & bit:
+            if thick <= 1:
+                pixel(cx + x, cy + y, c)
+                pixel(cx + y, cy + x, c)
+                pixel(cx - y, cy + x, c)
+                pixel(cx - x, cy + y, c)
+                pixel(cx - x, cy - y, c)
+                pixel(cx - y, cy - x, c)
+                pixel(cx + y, cy - x, c)
+                pixel(cx + x, cy - y, c)
+            else:
+                t = 0 - (thick / 2)
+                while t < thick - (thick / 2):
+                    pixel(cx + x, cy + y + t, c)
+                    pixel(cx + y + t, cy + x, c)
+                    pixel(cx - y + t, cy + x, c)
+                    pixel(cx - x, cy + y + t, c)
+                    pixel(cx - x, cy - y + t, c)
+                    pixel(cx - y + t, cy - x, c)
+                    pixel(cx + y + t, cy - x, c)
+                    pixel(cx + x, cy - y + t, c)
+                    t += 1
+        ph += 1
         y += 1
         if err < 0:
             err += y + y + 1
@@ -214,6 +262,1187 @@ def disc(cx, cy, r, c=1):
                 pixel(cx + dx, cy + dy, c)
 ''',
 }
+
+
+# ---- NEW PRELUDE ENTRIES ----
+
+PRELUDE['ellipse'] = '''
+def ellipse(cx, cy, rx, ry, c=1):
+    x = rx
+    y = 0
+    rx2 = rx * rx
+    ry2 = ry * ry
+    dx2 = ry2 * (1 - rx - rx)
+    dy2 = rx2
+    err2 = 0
+    sx2 = ry2 * rx
+    sy2 = 0
+    while sx2 >= sy2:
+        pixel(cx + x, cy + y, c)
+        pixel(cx - x, cy + y, c)
+        pixel(cx - x, cy - y, c)
+        pixel(cx + x, cy - y, c)
+        sy2 += rx2
+        err2 += dy2
+        dy2 += rx2 + rx2
+        y += 1
+        if err2 + err2 + dx2 > 0:
+            sx2 -= ry2
+            err2 += dx2
+            dx2 += ry2 + ry2
+            x -= 1
+    x = 0
+    y = ry
+    dx2 = ry2
+    dy2 = rx2 * (1 - ry - ry)
+    err2 = 0
+    sy2 = rx2 * ry
+    sx2 = 0
+    while sx2 <= sy2:
+        pixel(cx + x, cy + y, c)
+        pixel(cx - x, cy + y, c)
+        pixel(cx - x, cy - y, c)
+        pixel(cx + x, cy - y, c)
+        sx2 += ry2
+        err2 += dx2
+        dx2 += ry2 + ry2
+        x += 1
+        if err2 + err2 + dy2 > 0:
+            sy2 -= rx2
+            err2 += dy2
+            dy2 += rx2 + rx2
+            y -= 1
+'''
+
+PRELUDE['fillellipse'] = '''
+def fillellipse(cx, cy, rx, ry, c=1):
+    ry2 = ry * ry
+    rx2 = rx * rx
+    for j in range(0 - ry, ry + 1):
+        w = rx2 - rx2 * j * j / ry2
+        if w < 0:
+            w = 0
+        xw = 0
+        while xw * xw <= w:
+            xw += 1
+        hline(cx - xw, cx + xw, cy + j, c)
+'''
+
+PRELUDE['tri'] = '''
+def tri(x0, y0, x1, y1, x2, y2, c=1):
+    line(x0, y0, x1, y1, c)
+    line(x1, y1, x2, y2, c)
+    line(x2, y2, x0, y0, c)
+'''
+
+PRELUDE['filltri'] = '''
+def filltri(x0, y0, x1, y1, x2, y2, c=1):
+    ax = x0
+    ay = y0
+    bx = x1
+    by = y1
+    ex = x2
+    ey = y2
+    tm = 0
+    if ay > by:
+        tm = ax
+        ax = bx
+        bx = tm
+        tm = ay
+        ay = by
+        by = tm
+    if ay > ey:
+        tm = ax
+        ax = ex
+        ex = tm
+        tm = ay
+        ay = ey
+        ey = tm
+    if by > ey:
+        tm = bx
+        bx = ex
+        ex = tm
+        tm = by
+        by = ey
+        ey = tm
+    h = ey - ay
+    if h == 0:
+        return 0
+    for y in range(ay, ey + 1):
+        xa = ax + (ex - ax) * (y - ay) / h
+        if y < by:
+            xb = ax + (bx - ax) * (y - ay) / (by - ay + 1)
+        else:
+            xb = bx + (ex - bx) * (y - by) / (ey - by + 1)
+        if xa > xb:
+            tm = xa
+            xa = xb
+            xb = tm
+        hline(xa, xb + 1, y, c)
+'''
+
+PRELUDE['roundrect'] = '''
+def roundrect(x, y, w, h, r, c=1):
+    hline(x + r, x + w - r, y, c)
+    hline(x + r, x + w - r, y + h - 1, c)
+    vline(x, y + r, y + h - r, c)
+    vline(x + w - 1, y + r, y + h - r, c)
+    cx0 = x + r
+    cy0 = y + r
+    cx1 = x + w - 1 - r
+    cy1 = y + h - 1 - r
+    xc = r
+    yc = 0
+    er2 = 1 - r
+    while xc >= yc:
+        pixel(cx1 + xc, cy1 + yc, c)
+        pixel(cx1 + yc, cy1 + xc, c)
+        pixel(cx0 - yc, cy1 + xc, c)
+        pixel(cx0 - xc, cy1 + yc, c)
+        pixel(cx0 - xc, cy0 - yc, c)
+        pixel(cx0 - yc, cy0 - xc, c)
+        pixel(cx1 + yc, cy0 - xc, c)
+        pixel(cx1 + xc, cy0 - yc, c)
+        yc += 1
+        if er2 < 0:
+            er2 += yc + yc + 1
+        else:
+            xc -= 1
+            er2 += (yc - xc) * 2 + 1
+'''
+
+PRELUDE['elapsed'] = '''
+def elapsed(t):
+    return ticks() - t
+'''
+
+# ---- RTC library, taken from libcw (github.com/u68/libcw) ----
+# libcw.h register map (volatile __near byte):
+#   0xF0C0 SECONDS, 0xF0C1 MINUTES, 0xF0C2 HOURS   - BCD
+#   0xF0C3 DAY (1..31), 0xF0C4 WEEK, 0xF0C5 MONTH (1..12) - binary
+#   0xF0C6 YEAR - binary offset from 2026, 0xF0C7 ENABLE (1 = run)
+# libcw.c semantics kept 1:1:
+#   rtc_get_seconds/minutes/hours -> second()/minute()/hour() (BCD decoded)
+#   rtc_get_day/month/year        -> day()/month()/year() (year() adds 2026)
+#   rtc_get_date's week           -> weekday() (raw RTC_WEEK byte)
+#   rtc_set_time                  -> set_time(): writes BCD directly, never
+#                                    touches ENABLE (libcw does not stop the
+#                                    RTC to write it)
+#   rtc_set_date(y, mo, d, week)  -> set_date(): writes DAY/MONTH/YEAR plus
+#                                    the WEEK register (auto-computed, 0 =
+#                                    Sunday..6 = Saturday - libcw's example
+#                                    rtc_set_date(2026, 2, 5, 4) is the
+#                                    Thursday of 2026-02-05)
+#   rtc_enable/rtc_disable/reset  -> rtc_enable()/rtc_disable()/rtc_reset()
+# poke() stores one byte, so set_date(2127, ...) wraps the year byte exactly
+# like libcw's (byte)(year - 2026) cast.
+PRELUDE['rtc'] = '''
+def _dec(b):
+    return ((b >> 4) & 15) * 10 + (b & 15)
+
+def _bcd(v):
+    return ((v / 10) << 4) | (v % 10)
+
+def second():
+    return _dec(peek(0xF0C0))
+
+def minute():
+    return _dec(peek(0xF0C1))
+
+def hour():
+    return _dec(peek(0xF0C2))
+
+def day():
+    return peek(0xF0C3)
+
+def weekday():
+    return peek(0xF0C4)
+
+def month():
+    return peek(0xF0C5)
+
+def year():
+    return peek(0xF0C6) + 2026
+
+# ---- convenience layer on top of the libcw primitives ----
+# _rtc[] holds one full RTC read: [0]h [1]m [2]s [3]day [4]week [5]month [6]year
+_rtc = [0, 0, 0, 0, 0, 0, 0]
+
+def _snap():
+    _rtc[0] = hour()
+    _rtc[1] = minute()
+    _rtc[2] = second()
+    _rtc[3] = day()
+    _rtc[4] = weekday()
+    _rtc[5] = month()
+    _rtc[6] = year()
+
+def rtc_read():
+    # one STABLE read of the whole RTC: two snapshots are compared, so a
+    # second/minute/day rollover landing in the middle of the read cannot
+    # tear the value (h from 12:59 + s from 13:00).
+    _snap()
+    while True:
+        a0 = _rtc[0]
+        a1 = _rtc[1]
+        a2 = _rtc[2]
+        a3 = _rtc[3]
+        a4 = _rtc[4]
+        a5 = _rtc[5]
+        a6 = _rtc[6]
+        _snap()
+        if a0 == _rtc[0] and a1 == _rtc[1] and a2 == _rtc[2] and a3 == _rtc[3] and a4 == _rtc[4] and a5 == _rtc[5] and a6 == _rtc[6]:
+            return
+
+def rtc_alive():
+    # 1 if the RTC is ticking (the second byte moves within ~2.5 s), else 0
+    rtc_enable()
+    a = second()
+    t = ticks()
+    while elapsed(t) < 20000:
+        if second() != a:
+            return 1
+    return 0
+
+# granular setters - libcw rtc_set_hours/minutes/seconds/day/month/year:
+# change ONE field, every other register keeps its value
+def set_hours(h):
+    poke(0xF0C2, _bcd(h))
+
+def set_minutes(m):
+    poke(0xF0C1, _bcd(m))
+
+def set_seconds(s):
+    poke(0xF0C0, _bcd(s))
+
+def set_day(d):
+    poke(0xF0C3, d)
+
+def set_month(mo):
+    poke(0xF0C5, mo)
+
+def set_year(y):
+    poke(0xF0C6, y - 2026)
+'''
+PRELUDE['set_time'] = '''
+def set_time(h, m, s):
+    poke(0xF0C0, _bcd(s))
+    poke(0xF0C1, _bcd(m))
+    poke(0xF0C2, _bcd(h))
+'''
+PRELUDE['set_date'] = '''
+def set_date(y, mo, d):
+    poke(0xF0C6, y - 2026)
+    poke(0xF0C5, mo)
+    poke(0xF0C3, d)
+    poke(0xF0C4, _weekday(y, mo, d))
+'''
+PRELUDE['_weekday'] = '''
+def _weekday(y, mo, d):
+    # Zeller; 0 = Sunday .. 6 = Saturday (matches libcw rtc_set_date example)
+    if mo < 3:
+        mo += 12
+        y -= 1
+    k = y % 100
+    j = y / 100
+    h = (d + (13 * (mo + 1)) / 5 + k + k / 4 + j / 4 + 5 * j) % 7
+    return (h + 6) % 7
+'''
+PRELUDE['rtc_ctl'] = '''
+def rtc_enable():
+    poke(0xF0C7, 1)
+
+def rtc_disable():
+    poke(0xF0C7, 0)
+
+def rtc_reset():
+    rtc_disable()
+    poke(0xF0C0, 0)
+    poke(0xF0C1, 0)
+    poke(0xF0C2, 0)
+    poke(0xF0C3, 1)
+    poke(0xF0C4, 1)
+    poke(0xF0C5, 1)
+    poke(0xF0C6, 0)
+'''
+
+# waitkey(ms): wait up to ms milliseconds but return the moment a NEW key
+# press arrives. Edge semantics - a HELD key is reported once, not once per
+# loop, so clock/game loops can drop their manual last-key bookkeeping.
+# Returns the scan code of the new press, or -1 when the time ran out.
+# The timeout is paced by delay_ms(1) - NOT by ticks()/elapsed(): delay_ms
+# re-arms Timer0 from scratch on every chunk (clear FCON bit 1, TM0D, TM0C=0,
+# TM0CON=0101, exactly libcw __delay()), which is the one timer dance proven
+# to run on real hardware. A raw ticks() read can sit still if the OS leaves
+# the timer parked, and that froze the whole loop until a key was pressed.
+# Any ms >= 0 works (delay_ms itself chunks at 256 ms).
+PRELUDE['waitkey'] = '''
+_wkl = -1
+
+def waitkey(ms):
+    global _wkl
+    if ms < 0:
+        ms = 0
+    while ms > 0:
+        k = key()
+        if k != _wkl:
+            _wkl = k
+            if k != -1:
+                return k
+        delay_ms(1)
+        ms -= 1
+    k = key()
+    if k != _wkl:
+        _wkl = k
+        if k != -1:
+            return k
+    return -1
+'''
+
+# draw_time(x, y) / draw_date(x, y): draw HH:MM:SS / DD/MM/YY straight from
+# the RTC (stable read inside), 8 px digit pitch - the layout of the clock
+# demos. No decode-and-format code needed in the program.
+PRELUDE['drawtime'] = '''
+def draw_time(x, y):
+    rtc_read()
+    num(x, y, _rtc[0] / 10)
+    num(x + 8, y, _rtc[0] % 10)
+    text(x + 18, y, ":")
+    num(x + 26, y, _rtc[1] / 10)
+    num(x + 34, y, _rtc[1] % 10)
+    text(x + 44, y, ":")
+    num(x + 52, y, _rtc[2] / 10)
+    num(x + 60, y, _rtc[2] % 10)
+
+def draw_date(x, y):
+    rtc_read()
+    num(x, y, _rtc[3] / 10)
+    num(x + 8, y, _rtc[3] % 10)
+    text(x + 18, y, "/")
+    num(x + 26, y, _rtc[5] / 10)
+    num(x + 34, y, _rtc[5] % 10)
+    text(x + 44, y, "/")
+    num(x + 52, y, _rtc[6] % 100 / 10)
+    num(x + 60, y, _rtc[6] % 10)
+'''
+
+PRELUDE['strlen'] = '''
+def strlen(s):
+    n = 0
+    while _rpeek(s + n) != 0:
+        n += 1
+    return n
+'''
+
+PRELUDE['strcmp'] = '''
+def strcmp(a, b):
+    while True:
+        ca = _rpeek(a)
+        cb = _rpeek(b)
+        if ca != cb:
+            return ca - cb
+        if ca == 0:
+            return 0
+        a += 1
+        b += 1
+'''
+
+PRELUDE['strcpy'] = '''
+def strcpy(dst, src):
+    i = 0
+    while True:
+        c2 = peek(src + i)
+        poke(dst + i, c2)
+        if c2 == 0:
+            break
+        i += 1
+    return dst
+'''
+
+PRELUDE['atoi'] = '''
+def atoi(s):
+    n = 0
+    neg = 0
+    c3 = _rpeek(s)
+    if c3 == 45:
+        neg = 1
+        s += 1
+        c3 = _rpeek(s)
+    while c3 >= 48 and c3 <= 57:
+        n = n * 10 + (c3 - 48)
+        s += 1
+        c3 = _rpeek(s)
+    if neg:
+        return 0 - n
+    return n
+'''
+
+PRELUDE['itoa'] = '''
+def itoa(buf, n, base):
+    if n == -32768:
+        poke(buf, 45)
+        poke(buf + 1, 51)
+        poke(buf + 2, 50)
+        poke(buf + 3, 55)
+        poke(buf + 4, 54)
+        poke(buf + 5, 56)
+        poke(buf + 6, 0)
+        return buf
+    pos = 0
+    neg = 0
+    if n < 0:
+        neg = 1
+        n = 0 - n
+    if n == 0:
+        poke(buf, 48)
+        poke(buf + 1, 0)
+        return buf
+    d4 = n
+    while d4 > 0:
+        r4 = d4 % base
+        d4 = d4 / base
+        if r4 < 10:
+            poke(buf + 7 + pos, 48 + r4)
+        else:
+            poke(buf + 7 + pos, 87 + r4)
+        pos += 1
+    if neg:
+        poke(buf + 7 + pos, 45)
+        pos += 1
+    i4 = 0
+    while i4 < pos:
+        poke(buf + i4, peek(buf + 7 + pos - 1 - i4))
+        i4 += 1
+    poke(buf + pos, 0)
+    return buf
+'''
+
+PRELUDE['getc'] = '''
+def getc():
+    return wait_key()
+'''
+
+# ---- input_num: type a number on the calculator keypad ----
+# The digit keys do NOT have contiguous scan codes (cw: K_0=11, K_9=45, K_1=63),
+# so a `k >= K_0 and k <= K_9` range test is wrong twice over: K_1/K_2/K_3/K_4/
+# K_5/K_6/K_7/K_8 fall outside [K_0..K_9] and get ignored, while K_DOT/K_MENU/
+# K_DIV/K_MINUS/K_RIGHT/K_DOWN/K_DEL/K_MUL/K_PLUS/K_UP/K_LEFT fall inside and
+# get read as digits. Keys are matched one by one here, like getc_tap does.
+# Display: the field is redrawn in place (clear_rect of its own box only) and
+# flip() is used ONLY when the caller draws buffered (draw mode at 0xE800), so
+# a direct-draw caller keeps its labels on screen and a buffered caller sees
+# the value on every keystroke. flip() in direct mode would push the EMPTY back
+# buffer over the LCD and blank the screen.
+# K_MINUS (and K_NEG, the (-) key next to the digits on cw) toggles the sign,
+# DEL backspaces, EXE confirms, AC cancels with -32768. default != 0 is shown
+# and kept; the first typed digit REPLACES it. Values stay within 16 bits:
+# digits that would push past 32767 are dropped.
+PRELUDE['input_num'] = '''
+def _dig(k):
+    if k == K_0:
+        return 0
+    elif k == K_1:
+        return 1
+    elif k == K_2:
+        return 2
+    elif k == K_3:
+        return 3
+    elif k == K_4:
+        return 4
+    elif k == K_5:
+        return 5
+    elif k == K_6:
+        return 6
+    elif k == K_7:
+        return 7
+    elif k == K_8:
+        return 8
+    elif k == K_9:
+        return 9
+    return -1
+
+def input_num(x, y, default=0):
+    n5 = default
+    sg5 = 0
+    if n5 < 0:
+        sg5 = 1
+        n5 = 0 - n5
+        if n5 < 0:
+            n5 = 32767
+    edit5 = 0
+    m5 = peek(0xE800)
+    while True:
+        clear_rect(x, y, 80, 10)
+        if sg5 and n5 != 0:
+            char(x, y, 45)
+            num(x + 6, y, n5)
+        else:
+            num(x, y, n5)
+        if m5:
+            flip()
+        k5 = wait_key()
+        if k5 == K_AC:
+            return -32768
+        if k5 == K_EXE:
+            if sg5:
+                return 0 - n5
+            return n5
+        if k5 == K_MINUS or k5 == K_NEG:
+            sg5 = 1 - sg5
+            edit5 = 1
+        elif k5 == K_DEL:
+            n5 = n5 / 10
+            edit5 = 1
+        else:
+            d5 = _dig(k5)
+            if d5 >= 0:
+                if edit5 == 0 or n5 == 0:
+                    n5 = d5
+                elif n5 < 3276:
+                    n5 = n5 * 10 + d5
+                elif n5 == 3276 and d5 < 8:
+                    n5 = n5 * 10 + d5
+                edit5 = 1
+'''
+
+
+# ---- clip ----
+# clip(x, y, w, h): set the drawing clip window; clip() with no arguments
+# (or clip(0, 0, 192, 64)) resets it to the full screen. The window lives in
+# the runtime state bytes 0xE801-0xE804 (x0, x1, y0, y1) which hline/vline
+# read and __rt_init initialises to the full screen - ported from the wiz7
+# line where this design was already proven.
+PRELUDE['clip'] = '''
+def clip(x=0, y=0, w=192, h=64):
+    x1 = x + w
+    y1 = y + h
+    if x < 0:
+        x = 0
+    if y < 0:
+        y = 0
+    if x1 > 192:
+        x1 = 192
+    if y1 > 64:
+        y1 = 64
+    poke(0xE801, x)
+    poke(0xE802, x1)
+    poke(0xE803, y)
+    poke(0xE804, y1)
+'''
+
+# ---- sprite with rot and flip ----
+# sprite(x, y, w, h, data, cao=8, dai=6, rot=0)
+# rot: 0=normal, 1=90CW, 2=180, 3=270CW
+# w/h in sprite-cells; cao/dai = pixels per cell (height, width)
+# negative cao = flip vertical; negative dai = flip horizontal
+# data is rom8 or pointer (address of bytes, row-major, 1 bit per pixel packed MSB first)
+# This is the "smart" PRELUDE version that interprets data as a pointer to rom data.
+PRELUDE['sprite_rot'] = '''
+def _sprite_px(sx, sy, pw, ph, data, rot, flipx, flipy):
+    bw = (pw + 7) / 8
+    for py in range(0, ph):
+        for px in range(0, pw):
+            byte_idx = py * bw + px / 8
+            bit_pos = 7 - (px & 7)
+            bval = _rpeek(data + byte_idx)
+            if (bval >> bit_pos) & 1:
+                rx = px
+                ry = py
+                if flipx:
+                    rx = pw - 1 - px
+                if flipy:
+                    ry = ph - 1 - py
+                if rot == 0:
+                    pixel(sx + rx, sy + ry)
+                elif rot == 1:
+                    pixel(sx + ph - 1 - ry, sy + rx)
+                elif rot == 2:
+                    pixel(sx + pw - 1 - rx, sy + ph - 1 - ry)
+                elif rot == 3:
+                    pixel(sx + ry, sy + pw - 1 - rx)
+def sprite(x, y, pw, ph, data, w=1, h=1, rot=0):
+    fpw = pw
+    fph = ph
+    fx = 0
+    fy = 0
+    if fpw < 0:
+        fx = 1
+        fpw = 0 - fpw
+    if fph < 0:
+        fy = 1
+        fph = 0 - fph
+    _sprite_px(x, y, fpw, fph, data, rot, fx, fy)
+'''
+
+# ---- getc_tap: multi-tap key reader ----
+# Returns char code (ASCII 'A'..'Z', '0'..'9') via multi-tap.
+# T9 style: press same key repeatedly to cycle through letters on that key.
+# Timeout (via ticks): ~800ms inactivity commits current char. ticks() runs at
+# 8000 ticks/s (Timer0 per libcw TICKS_PER_MS=8), so 800ms = 6400 ticks; a held
+# key advances the cycle every 100ms (800 ticks).
+# Returns committed char code, -32768 for AC (cancel), -2 for EXE (confirm)
+# and -3 for DEL (backspace). EXE/DEL arriving while a character is still
+# pending first commit that character; the control code is remembered in
+# _gc_pend and returned by the NEXT call, so no typed letter is ever lost.
+# Key mappings for cwii number keys (T9 layout):
+#   K_1 -> '.' ',' '!' '?'
+#   K_2 -> 'A' 'B' 'C'
+#   K_3 -> 'D' 'E' 'F'
+#   K_4 -> 'G' 'H' 'I'
+#   K_5 -> 'J' 'K' 'L'
+#   K_6 -> 'M' 'N' 'O'
+#   K_7 -> 'P' 'Q' 'R' 'S'
+#   K_8 -> 'T' 'U' 'V'
+#   K_9 -> 'W' 'X' 'Y' 'Z'
+#   K_0 -> ' '
+PRELUDE['getc_tap'] = '''
+_gc_pend = 0
+
+def getc_tap():
+    global _gc_pend
+    if _gc_pend:
+        c7 = _gc_pend
+        _gc_pend = 0
+        return c7
+    last_k = -1
+    tap_n = 0
+    tap_t = 0
+    while True:
+        k6 = key()
+        if k6 == K_AC:
+            return -32768
+        if k6 == K_EXE or k6 == K_DEL:
+            if last_k != -1:
+                _gc_pend = -2
+                if k6 == K_DEL:
+                    _gc_pend = -3
+                return _tap_char(last_k, tap_n)
+            if k6 == K_EXE:
+                return -2
+            return -3
+        if k6 != -1 and k6 != last_k:
+            if last_k != -1:
+                return _tap_char(last_k, tap_n)
+            last_k = k6
+            tap_n = 0
+            tap_t = ticks()
+        elif k6 == last_k:
+            if ticks() - tap_t > 800:
+                tap_n += 1
+                tap_t = ticks()
+        elif k6 == -1 and last_k != -1:
+            if ticks() - tap_t > 6400:
+                c6 = _tap_char(last_k, tap_n)
+                last_k = -1
+                tap_n = 0
+                return c6
+def _tap_char(k, n):
+    if k == K_1:
+        return 46 + n % 4
+    if k == K_2:
+        return 65 + n % 3
+    if k == K_3:
+        return 68 + n % 3
+    if k == K_4:
+        return 71 + n % 3
+    if k == K_5:
+        return 74 + n % 3
+    if k == K_6:
+        return 77 + n % 3
+    if k == K_7:
+        return 80 + n % 4
+    if k == K_8:
+        return 84 + n % 3
+    if k == K_9:
+        return 87 + n % 4
+    if k == K_0:
+        return 32
+    return 63
+'''
+
+# ---- input_tap: read a multi-tap string into buffer ----
+# input_tap(buf, max_len, x, y): fill buf with null-terminated string,
+# show current input at (x,y). EXE commits (returns length), DEL erases last
+# char, AC cancels (returns -1, buf cleared). flip() only when the caller
+# draws buffered (mode byte at 0xE800) - in direct mode flip would blank the
+# screen (same rule as input_num). A release-gate at entry keeps the key
+# that OPENED the screen (e.g. EXE) from confirming an empty string.
+PRELUDE['input_tap'] = '''
+def input_tap(bptr, max_len, x, y):
+    pos6 = 0
+    m6 = peek(0xE800)
+    poke(bptr, 0)
+    while key() != -1:
+        pass
+    while True:
+        c6 = getc_tap()
+        if c6 == -32768:
+            return -1
+        if c6 == -2:
+            return pos6
+        if c6 == -3:
+            if pos6 > 0:
+                pos6 -= 1
+                poke(bptr + pos6, 0)
+        elif pos6 < max_len - 1:
+            poke(bptr + pos6, c6)
+            pos6 += 1
+            poke(bptr + pos6, 0)
+        clear_rect(x, y, 120, 10)
+        text(x, y, bptr)
+        if m6:
+            flip()
+'''
+
+# ---- input_pad: on-screen keyboard ----
+# input_pad(buf, max_len, x, y): on-screen keyboard redrawn as a real key grid.
+#   row 0:  a b c d e f g h i j k l m n      (14 keys)
+#   row 1:  o p q r s t u v w x y z . ,
+#   row 2:  0 1 2 3 4 5 6 7 8 9 ? ! - :      (dedicated digit row)
+#   row 3:  [ Aa ] [    SPC    ] [ DEL ] [ OK ]
+# ▲▼◄► move (rows wrap), EXE presses the highlighted key, DEL backspaces,
+# ANS or the OK key confirms (returns length), AC cancels (returns -1).
+# Aa toggles caps: the 26 letter keys redraw in the other case and the key
+# label flips Aa/AA. SPC appends a space. The PHYSICAL digit keys (and the
+# decimal key) type straight into the field, so numbers can be typed without
+# walking the cursor. The selected key is shown INVERTED (invert_rect over the
+# key interior - glyph included), the grid lines are shared key borders, so it
+# looks like a real keypad. The pad is drawn ONCE and afterwards only the
+# selection invert / the input line are touched (fast on hardware too).
+# flip() only in buffered mode, like input_num/input_tap. A release-gate at
+# entry keeps the key that OPENED the screen (e.g. EXE) from pressing a key.
+# x/y place the input FIELD (y usually 12); the pad fills the screen below it.
+PRELUDE['input_pad'] = '''
+# Grid-line keyboard, 192x63, field at y=0..9, keyboard y=10..62
+# 4 char rows (11px each) + 1 control row (9px) = 53px
+# 10 cols (19px each), grid lines shared between keys
+# row 0: a-j  row 1: k-t  row 2: u-z 0-3  row 3: 4-9 . , ? !
+# control: [Aa=29][SPC=100][DEL=31][OK=29] (1px gaps, total=191)
+_pad_cs = "abcdefghijklmnopqrstuvwxyz0123456789.,?!"
+_pad_up = 0
+
+def _pad_ch(r, c):
+    global _pad_up
+    ch = _rpeek(_pad_cs + r * 10 + c)
+    if _pad_up and ch >= 97 and ch <= 122:
+        ch = ch - 32
+    return ch
+
+def _pdig(k):
+    if k == K_0:
+        return 48
+    elif k == K_1:
+        return 49
+    elif k == K_2:
+        return 50
+    elif k == K_3:
+        return 51
+    elif k == K_4:
+        return 52
+    elif k == K_5:
+        return 53
+    elif k == K_6:
+        return 54
+    elif k == K_7:
+        return 55
+    elif k == K_8:
+        return 56
+    elif k == K_9:
+        return 57
+    return 0
+
+def _pad_draw_grid():
+    clear_rect(0, 10, 192, 53)
+    hline(0, 192, 10)
+    hline(0, 192, 21)
+    hline(0, 192, 32)
+    hline(0, 192, 43)
+    hline(0, 192, 54)
+    hline(0, 192, 62)
+    c = 0
+    while c <= 10:
+        vline(1 + c * 19, 10, 54)
+        c += 1
+    r = 0
+    while r < 4:
+        c = 0
+        while c < 10:
+            char(7 + c * 19, 11 + r * 11, _pad_ch(r, c))
+            c += 1
+        r += 1
+    vline(1,   54, 63)
+    vline(30,  54, 63)
+    vline(131, 54, 63)
+    vline(162, 54, 63)
+    vline(191, 54, 63)
+    if _pad_up:
+        text(4,  55, "AA")
+    else:
+        text(4,  55, "Aa")
+    text(55, 55, "SPACE")
+    text(134, 55, "DEL")
+    text(165, 55, "OK")
+
+def _pad_sel(r, c):
+    if r < 4:
+        invert_rect(2 + c * 19, 11 + r * 11, 18, 10)
+    else:
+        if c == 0:
+            invert_rect(2,   55, 28, 8)
+        elif c == 1:
+            invert_rect(31,  55, 100, 8)
+        elif c == 2:
+            invert_rect(132, 55, 29, 8)
+        else:
+            invert_rect(163, 55, 28, 8)
+
+def _pad_redraw_letters():
+    r = 0
+    while r < 2:
+        c = 0
+        while c < 10:
+            clear_rect(2 + c * 19, 11 + r * 11, 18, 10)
+            char(7 + c * 19, 11 + r * 11, _pad_ch(r, c))
+            c += 1
+        r += 1
+    clear_rect(2, 55, 28, 8)
+    if _pad_up:
+        text(4, 55, "AA")
+    else:
+        text(4, 55, "Aa")
+
+def _pad_field(b, n, x, fw, m):
+    clear_rect(x + 1, 1, fw - 2, 8)
+    text(x + 2, 1, b)
+    char(x + 2 + n * 6, 1, 95)
+    if m:
+        flip()
+
+def input_pad(bptr, max_len, x, y):
+    global _pad_up
+    _pad_up = 0
+    pad_r = 0
+    pad_c = 0
+    pos7 = 0
+    m7 = peek(0xE800)
+    fw7 = max_len * 6 + 8
+    if fw7 > 190:
+        fw7 = 190
+    poke(bptr, 0)
+    while key() != -1:
+        pass
+    clear()
+    rect(x, 0, fw7, 10)
+    _pad_draw_grid()
+    _pad_field(bptr, 0, x, fw7, 0)
+    _pad_sel(0, 0)
+    if m7:
+        flip()
+    while True:
+        k7 = wait_key()
+        if k7 == K_AC:
+            return -1
+        if k7 == K_ANS:
+            return pos7
+        asc8 = _pdig(k7)
+        if asc8 > 0:
+            if pos7 < max_len - 1:
+                poke(bptr + pos7, asc8)
+                pos7 += 1
+                poke(bptr + pos7, 0)
+                _pad_field(bptr, pos7, x, fw7, m7)
+        if k7 == K_DOT:
+            if pos7 < max_len - 1:
+                poke(bptr + pos7, 46)
+                pos7 += 1
+                poke(bptr + pos7, 0)
+                _pad_field(bptr, pos7, x, fw7, m7)
+        if k7 == K_DEL:
+            if pos7 > 0:
+                _pad_sel(pad_r, pad_c)
+                pos7 -= 1
+                poke(bptr + pos7, 0)
+                _pad_field(bptr, pos7, x, fw7, m7)
+                _pad_sel(pad_r, pad_c)
+        if k7 == K_EXE:
+            if pad_r < 4:
+                if pos7 < max_len - 1:
+                    poke(bptr + pos7, _pad_ch(pad_r, pad_c))
+                    pos7 += 1
+                    poke(bptr + pos7, 0)
+                    _pad_field(bptr, pos7, x, fw7, m7)
+            else:
+                if pad_c == 0:
+                    _pad_sel(pad_r, pad_c)
+                    _pad_up = 1 - _pad_up
+                    _pad_redraw_letters()
+                    _pad_sel(pad_r, pad_c)
+                    if m7:
+                        flip()
+                elif pad_c == 1:
+                    if pos7 < max_len - 1:
+                        poke(bptr + pos7, 32)
+                        pos7 += 1
+                        poke(bptr + pos7, 0)
+                        _pad_field(bptr, pos7, x, fw7, m7)
+                elif pad_c == 2:
+                    if pos7 > 0:
+                        pos7 -= 1
+                        poke(bptr + pos7, 0)
+                        _pad_field(bptr, pos7, x, fw7, m7)
+                else:
+                    return pos7
+        if k7 == K_UP:
+            _pad_sel(pad_r, pad_c)
+            if pad_r == 0:
+                pad_r = 4
+                if pad_c >= 7:
+                    pad_c = 3
+                elif pad_c >= 3:
+                    pad_c = 2
+                elif pad_c >= 1:
+                    pad_c = 1
+                else:
+                    pad_c = 0
+            elif pad_r == 4:
+                pad_r = 3
+                if pad_c == 0:
+                    pad_c = 0
+                elif pad_c == 1:
+                    pad_c = 4
+                elif pad_c == 2:
+                    pad_c = 7
+                else:
+                    pad_c = 9
+            else:
+                pad_r -= 1
+            _pad_sel(pad_r, pad_c)
+            if m7:
+                flip()
+        if k7 == K_DOWN:
+            _pad_sel(pad_r, pad_c)
+            if pad_r == 3:
+                pad_r = 4
+                if pad_c >= 7:
+                    pad_c = 3
+                elif pad_c >= 4:
+                    pad_c = 2
+                elif pad_c >= 1:
+                    pad_c = 1
+                else:
+                    pad_c = 0
+            elif pad_r == 4:
+                pad_r = 0
+                if pad_c == 0:
+                    pad_c = 0
+                elif pad_c == 1:
+                    pad_c = 4
+                elif pad_c == 2:
+                    pad_c = 7
+                else:
+                    pad_c = 9
+            else:
+                pad_r += 1
+            _pad_sel(pad_r, pad_c)
+            if m7:
+                flip()
+        if k7 == K_LEFT:
+            _pad_sel(pad_r, pad_c)
+            if pad_r < 4:
+                pad_c = (pad_c + 9) % 10
+            else:
+                pad_c = (pad_c + 3) % 4
+            _pad_sel(pad_r, pad_c)
+            if m7:
+                flip()
+        if k7 == K_RIGHT:
+            _pad_sel(pad_r, pad_c)
+            if pad_r < 4:
+                pad_c = (pad_c + 1) % 10
+            else:
+                pad_c = (pad_c + 1) % 4
+            _pad_sel(pad_r, pad_c)
+            if m7:
+                flip()
+'''
+
+PRELUDE['word'] = '''
+def _rdw(a):
+    return peek(a) + peek(a + 1) * 256
+
+def _wrw(a, v):
+    poke(a, v & 255)
+    poke(a + 1, (v >> 8) & 255)
+'''
+
+PRELUDE['alloc'] = '''
+def alloc(n):
+    if n < 1:
+        return 0
+    need = n
+    if need & 1:
+        need += 1
+    need += 2
+    p = _rdw(0xE818)
+    hi = _rdw(0xE81A)
+    while p < hi:
+        h = _rdw(p)
+        sz = h & 0x7FFF
+        if h < 0 and sz >= need:
+            if sz - need >= 4:
+                _wrw(p, need)
+                _wrw(p + need, (sz - need) | 0x8000)
+            else:
+                _wrw(p, sz)
+            return p + 2
+        p += sz
+    return 0
+'''
+
+PRELUDE['free'] = '''
+def _merge():
+    q = _rdw(0xE818)
+    hi = _rdw(0xE81A)
+    while q < hi:
+        h = _rdw(q)
+        if h < 0:
+            sz = h & 0x7FFF
+            n2 = q + sz
+            while n2 < hi:
+                h2 = _rdw(n2)
+                if h2 >= 0:
+                    break
+                sz += h2 & 0x7FFF
+                n2 = q + sz
+            _wrw(q, sz | 0x8000)
+            q += sz
+        else:
+            q += h
+    return 0
+
+def free(p):
+    if p == 0:
+        return 0
+    _wrw(p - 2, _rdw(p - 2) - 32768)
+    _merge()
+    return 0
+'''
+
+# ---- RAM file system ON the heap (nodes are ordinary heap blocks) ----
+# f_save(name, buf, n) / f_load(name, buf, max) / f_exists(name) / f_remove(name).
+# The list head is the word at 0xE81C; each node is an 18-byte heap block:
+# [0..11] name (NUL padded) [12..13] next [14..15] data ptr [16..17] length.
+# Data is a separate heap block, so removing a file gives the memory back to
+# alloc(). Names are string literals (read with _rpeek, like text()) - on the
+# cwapp target a RAM buffer as the name would be read in the wrong segment.
+PRELUDE['file'] = '''
+def _cpy(_dst, _src, n):
+    for i in range(0, n):
+        _dst[i] = peek(_src + i)
+    return 0
+
+def _feq(_nm, _node):
+    k = 0
+    while k < 12:
+        c = _rpeek(_nm + k)
+        if c != peek(_node + k):
+            return 0
+        if c == 0:
+            return 1
+        k += 1
+    return 1
+
+def _fnode(_nm):
+    p = _rdw(0xE81C)
+    while p != 0:
+        if _feq(_nm, p):
+            return p
+        p = _rdw(p + 12)
+    return 0
+
+def _fsnew(_nm):
+    _node = alloc(18)
+    if _node == 0:
+        return 0
+    k = 0
+    while k < 12:
+        _node[k] = 0
+        k += 1
+    k = 0
+    while k < 12:
+        c = _rpeek(_nm + k)
+        if c == 0:
+            break
+        _node[k] = c
+        k += 1
+    if k == 12:
+        free(_node)
+        return 0
+    _wrw(_node + 12, _rdw(0xE81C))
+    _wrw(0xE81C, _node)
+    _wrw(_node + 14, 0)
+    _wrw(_node + 16, 0)
+    return _node
+
+def f_save(_nm, _buf, n):
+    if n < 0:
+        return 0
+    _node = _fnode(_nm)
+    if _node == 0:
+        _node = _fsnew(_nm)
+        if _node == 0:
+            return 0
+    _old = _rdw(_node + 14)
+    if _old != 0:
+        free(_old)
+    _wrw(_node + 14, 0)
+    _wrw(_node + 16, 0)
+    if n == 0:
+        return 1
+    _data = alloc(n)
+    if _data == 0:
+        return 0
+    _cpy(_data, _buf, n)
+    _wrw(_node + 14, _data)
+    _wrw(_node + 16, n)
+    return 1
+
+def f_load(_nm, _buf, mx):
+    _node = _fnode(_nm)
+    if _node == 0:
+        return -1
+    n = _rdw(_node + 16)
+    if n > mx:
+        n = mx
+    _data = _rdw(_node + 14)
+    if _data != 0 and n > 0:
+        _cpy(_buf, _data, n)
+    return n
+
+def f_exists(_nm):
+    if _fnode(_nm) != 0:
+        return 1
+    return 0
+
+def f_remove(_nm):
+    _prev = 0
+    p = _rdw(0xE81C)
+    while p != 0:
+        if _feq(_nm, p):
+            _nxt = _rdw(p + 12)
+            if _prev == 0:
+                _wrw(0xE81C, _nxt)
+            else:
+                _wrw(_prev + 12, _nxt)
+            d = _rdw(p + 14)
+            if d != 0:
+                free(d)
+            free(p)
+            return 1
+        _prev = p
+        p = _rdw(p + 12)
+    return 0
+'''
 
 from font6x8 import FONT
 PRELUDE['font'] = 'rom8 _font = [' + ', '.join(str(v) for v in FONT) + ']\n'
@@ -259,7 +1488,7 @@ def num(x, y, n):
     return x
 '''
 PRELUDE['charz'] = '''
-def charz(x, y, c, w, h):
+def charz(x, y, c, h, w):
     if c < 32 or c > 126:
         c = 63
     base = (c - 32) * 8
@@ -283,21 +1512,21 @@ def charz(x, y, c, w, h):
             sr += 1
 '''
 PRELUDE['textz'] = '''
-def textz(x, y, w, h, s):
+def textz(x, y, h, w, s):
     c = _rpeek(s)
     while c != 0:
-        charz(x, y, c, w, h)
+        charz(x, y, c, h, w)
         x += w
         s += 1
         c = _rpeek(s)
     return x
 '''
 PRELUDE['numz'] = '''
-def numz(x, y, w, h, n):
+def numz(x, y, h, w, n):
     if n == -32768:
-        return textz(x, y, w, h, \"-32768\")
+        return textz(x, y, h, w, "-32768")
     if n < 0:
-        charz(x, y, 45, w, h)
+        charz(x, y, 45, h, w)
         x += w
         n = 0 - n
     d = 10000
@@ -306,21 +1535,13 @@ def numz(x, y, w, h, n):
         q = n / d
         n = n - q * d
         if q > 0 or shown or d == 1:
-            charz(x, y, 48 + q, w, h)
+            charz(x, y, 48 + q, h, w)
             x += w
             shown = 1
         d = d / 10
     return x
 '''
-PRELUDE['sprite'] = '''
-def sprite(x, y, w, h, d):
-    bw = (w + 7) >> 3
-    for r in range(0, h):
-        for k in range(0, w):
-            b = _rpeek(d + r * bw + (k >> 3))
-            if b & (128 >> (k & 7)):
-                pixel(x + k, y + r)
-'''
+# sprite() defined in PRELUDE['sprite_rot']
 
 PRELUDE['draw'] = '''
 def _hexv(c):
@@ -949,7 +2170,7 @@ class Compiler:
         return out
 
     def rewrite_print(self, node, data_names):
-        """print(x, y, w, h, value, ...) -> num(text(x, y, a), y, b)...  A string literal or a rom8/array name
+        """print(x, y, a, b, ...) -> num(text(x, y, a), y, b)...  A string literal or a rom8/array name
         prints as text, anything else prints as a number. Each piece returns the x where it ended."""
         if isinstance(node, list):
             return [self.rewrite_print(x, data_names) for x in node]
@@ -958,19 +2179,18 @@ class Compiler:
         node = tuple(self.rewrite_print(x, data_names) for x in node)
         if len(node) == 4 and node[0] == 'call' and node[1] in ('text', 'char') and len(node[2]) == 5 \
                 and node[1] not in self.user_defs:
-            return ('call', node[1] + 'z', node[2], node[3])    # text(x, y, w, h, s) / char(x, y, c, w, h)
+            return ('call', node[1] + 'z', node[2], node[3])    # text(x, y, cao, dai, s) / char(x, y, c, cao, dai)
         if len(node) == 4 and node[0] == 'call' and node[1] == 'print':
             _, _, args, ln = node
             if len(args) < 3:
                 raise WizError('print(x, y, value, ...) needs at least 3 arguments', ln)
-            # print(x, y, w, h, value, ...): when w and h are both constants and a value follows,
-            # they are the pixel width and height of each character cell (default 6 x 8)
+            # print(x, y, cao, dai, value, ...): when cao and dai are both constants and a value follows,
+            # they are the pixel height and width of each character cell (default 8 x 6)
             size = None
             if len(args) >= 5 and args[2][0] == 'num' and args[3][0] == 'num':
                 if args[2][1] < 1 or args[3][1] < 1:
-                    raise WizError('print(): character w and h must be at least 1', ln)
-                # args[2]=w, args[3]=h; textz/numz/charz also expect (x, y, w, h, ...)
-                size = [args[2], args[3]]   # [w, h]
+                    raise WizError('print(): character cao and dai must be at least 1', ln)
+                size = [args[2], args[3]]
                 args = args[:2] + args[4:]
             cur = args[0]
             for a in args[2:]:
@@ -1060,6 +2280,8 @@ class Compiler:
         self.user_defs = {x[1] for x in prog if x[0] == 'def'}
         prog = self.rewrite_print(prog, {x[1] for x in prog if x[0] in ('rom', 'arr')})
         prog = self.add_prelude(prog, consts)
+        self.uses_heap = any(x[0] == 'def' and x[1] in (
+            'alloc', 'free', 'f_save', 'f_load', 'f_exists', 'f_remove') for x in prog)
         top = []
         for s in prog:
             if s[0] == 'def':
@@ -1129,6 +2351,18 @@ class Compiler:
             self.func(d)
         self.expand_frames()
         self.emit_data()
+        # heap: everything between the last variable and the runtime area at 0xE000.
+        # alloc() and the RAM file system live here (cw ~3.5 KB for a typical
+        # program, cwii up to ~20 KB). Emitted as EQUs so runtime.asm can
+        # bootstrap them; pure-asm builds (kernel) define their own.
+        self.out.append('__HEAP_LO EQU 0x%04X' % (self.next_addr & 0xFFFF))
+        self.out.append('__HEAP_HI EQU 0x%04X' % self.var_limit)
+        heap = self.var_limit - (self.next_addr & 0xFFFF)
+        if heap < 256:
+            self.notes.append('variables reach 0x%04X: only %d bytes left for the heap below 0xE000'
+                              % (self.next_addr & 0xFFFF, heap))
+        elif self.uses_heap:
+            self.notes.append('heap: %d bytes free after the variables (alloc/file region, up to 0xE000)' % heap)
         return '\n'.join(self.out) + '\n'
 
     def init_arrays(self):
@@ -1269,21 +2503,33 @@ class Compiler:
             self.ex(s[1])
         elif k == 'aassign':
             _, name, idx, rhs, ln = s
-            if name not in self.arrays:
-                raise WizError('%r is not a RAM array (rom tables are read-only)' % name, ln)
-            addr, size, _ = self.arrays[name]
-            self.ex(rhs)
-            if idx[0] == 'num':
-                self.emit('ST ER0, 0x%04X' % ((addr + 2 * idx[1]) & 0xFFFF))
+            if name in self.arrays:
+                addr, size, _ = self.arrays[name]
+                self.ex(rhs)
+                if idx[0] == 'num':
+                    self.emit('ST ER0, 0x%04X' % ((addr + 2 * idx[1]) & 0xFFFF))
+                else:
+                    self.emit('PUSH ER0')
+                    self.ex(idx)
+                    self.emit('ADD ER0, ER0')
+                    self.const(2, addr)
+                    self.emit('ADD ER0, ER2')
+                    self.emit('MOV ER2, ER0')
+                    self.emit('POP ER0')
+                    self.emit('ST ER0, [ER2]')
+            elif name in self.vars or (self.fn and (self.fn + '.' + name) in self.vars):
+                # pointer variable: p[i] = v -> _hpoke(p+i, v)
+                qname = (self.fn + '.' + name) if (self.fn and (self.fn + '.' + name) in self.vars) else name
+                addr = self.vars[qname]
+                self.ex(rhs)              # ER0 = value
+                self.emit('PUSH ER0')    # save value
+                self.ex(idx)             # ER0 = index
+                self.emit('L ER2, 0x%04X' % addr)  # ER2 = pointer value
+                self.emit('ADD ER0, ER2')            # ER0 = ptr + i
+                self.emit('POP ER2')                 # ER2 = value
+                self.emit('BL __hpoke')              # write byte
             else:
-                self.emit('PUSH ER0')
-                self.ex(idx)
-                self.emit('ADD ER0, ER0')
-                self.const(2, addr)
-                self.emit('ADD ER0, ER2')
-                self.emit('MOV ER2, ER0')
-                self.emit('POP ER0')
-                self.emit('ST ER0, [ER2]')
+                raise WizError('%r is not a RAM array or pointer variable (rom tables are read-only)' % name, ln)
         elif k == 'pass' or k == 'global':
             pass
         elif k == 'if':
@@ -1404,8 +2650,17 @@ class Compiler:
             elif name in self.roms:
                 label, kind, _ = self.roms[name]
                 word, base = (kind == 'rom'), ('l', label)
+            elif name in self.vars or (self.fn and (self.fn + '.' + name) in self.vars):
+                # pointer variable: p[i] -> byte at *(p+i) via _hpeek(p+i)
+                qname = (self.fn + '.' + name) if (self.fn and (self.fn + '.' + name) in self.vars) else name
+                addr = self.vars[qname]
+                self.ex(idx)                       # ER0 = index
+                self.emit('L ER2, 0x%04X' % addr) # ER2 = pointer value
+                self.emit('ADD ER0, ER2')          # ER0 = ptr + i
+                self.emit('BL __hpeek')            # ER0 = byte at that address
+                return
             else:
-                raise WizError('%r is not an array or table' % name, ln)
+                raise WizError('%r is not an array, table, or pointer variable' % name, ln)
             self.ex(idx)
             if word:
                 self.emit('ADD ER0, ER0')
@@ -1487,6 +2742,21 @@ class Compiler:
                 if len(args) == 2:
                     self.emit('MOV ER4, #1')
                 self.emit('BL __pixel')
+            elif name == 'getpixel':
+                self.emit('BL __getpixel')
+            elif name == 'copy_rect':
+                self.emit('BL __copy_rect')
+            elif name == 'invert_rect':
+                self.emit('BL __invert_rect')
+            elif name == 'clear_rect':
+                self.emit('BL __clear_rect')
+            elif name == '_hpeek':
+                self.emit('BL __hpeek')
+            elif name == '_hpoke':
+                self.emit('BL __hpoke')
+            elif name in ('ticks', 'delay_ms', 'getc', 'input_num',
+                          'strlen', 'strcmp', 'strcpy', 'atoi', 'itoa'):
+                self.emit('BL __' + name)
             else:
                 self.emit('BL __' + name.lstrip('_'))
             return

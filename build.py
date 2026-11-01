@@ -104,6 +104,12 @@ def main():
         from wizc import LAST_NOTES
         for note in LAST_NOTES:
             print('note [%s]:' % name, note)
+        # informational only - the compiler NEVER rejects a program for its size
+        # (there is no 'program too large' error); this just says when the .bin
+        # would not fit the real chip's ROM window, so nobody bricks by accident.
+        if name != 'cwapp' and len(rom) > tg.rom_limit:
+            print('note [%s]: ROM %d bytes exceeds the %s ROM window (0x0000-0x%04X) - still built, it will not fit the real chip'
+                  % (name, len(rom), name, tg.rom_limit))
         open(out, 'wb').write(rom)
         open(os.path.splitext(out)[0] + '.asm', 'w').write(full)
         print('%s [%s %s, core %s]: %d bytes ROM, %d variables -> %s' % (a.prog, name, tg.chip, tg.core, len(rom), len(variables), out))
