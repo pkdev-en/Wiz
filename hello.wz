@@ -1,3 +1,21 @@
-for cw
-clear()
-print(12, 12, 33, 23, "hello")
+# hello.wz — app thay slot 2 của menu fx-580VN X
+# Build+vá: python3 patch_menu.py rom.bin hello.wz hello_patched.bin --slot 2
+# Trong app: bấm AC/ON -> MENU GỐC của máy hiện ra và Ở LẠI đó để tự chọn app
+# khác (exit() = mở menu gốc y hệt handler phím MENU của firmware).
+# AC trong menu = hủy, quay lại màn HELLO; chọn app khác = chuyển app bth.
+# (Mã K_AC = 34: đối chiếu ROM — 0:A18A quét hàng F046=10h, cột F040.2.)
+
+def draw():
+    clear()
+    text(28, 8, "HELLO")
+    text(16, 24, "WIZ TREN 580!")
+    text(4, 48, "BAM MENU DE CHON APP")
+    text(4, 56, "AC = MO MENU")
+
+def main():
+    draw()
+    while True:
+        k = wait_key()
+        if k == K_AC:
+            exit()
+            draw()

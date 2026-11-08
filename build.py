@@ -36,6 +36,10 @@ def runtime_for(target):
     for line in open(os.path.join(HERE, 'runtime.asm')).read().split('\n'):
         if line.rstrip().endswith(drop):
             continue
+        if line.rstrip().endswith(';@906') and target.name != 'cwapp':
+            continue          # ML620906-only key matrix lines
+        if line.rstrip().endswith(';@no906') and target.name == 'cwapp':
+            continue          # old cwii/cw key matrix lines
         if line.rstrip().endswith(';@seg') and not target.rom_seg:
             continue
         if line.rstrip().endswith(';@off'):          # VRAM row offset (cw: user y=0 is VRAM row 1)
@@ -68,7 +72,7 @@ def main():
     ap.add_argument('out', nargs='?')
     ap.add_argument('--target', default=None)
     a = ap.parse_args()
-    text = open(a.prog).read()
+    text = open(a.prog, encoding='utf8').read()
     try:
         declared = declared_targets(text)
     except SectionError as e:

@@ -311,15 +311,20 @@ __rti_hpd:
     POP PC
 
 ; key_down(k=ER0) -> ER0 = 1 while scan index k is held, else 0
+; ML620906 (fx-580VN X): KO hàng = bit THẤP (0x01<<row, bật cao), KI cột = bit thấp
 __key_down:
     AND R0, #3FH
     MOV R2, R0
     SRL R2, #3
     MOV R3, #80H
-    SRL R3, R2
+    SRL R3, R2        ;@no906
+    MOV R3, #1        ;@906
+    SLL R3, R2        ;@906
     AND R0, #7
     MOV R4, #80H
-    SRL R4, R0
+    SRL R4, R0        ;@no906
+    MOV R4, #1        ;@906
+    SLL R4, R0        ;@906
     ST R3, 0F046H
     L R5, 0F040H
     AND R5, R4
@@ -346,7 +351,9 @@ __key_hit:
     ADD ER6, ER4
     AND R2, #7
     MOV R8, #80H
-    SRL R8, R2
+    SRL R8, R2        ;@no906
+    MOV R8, #1        ;@906
+    SLL R8, R2        ;@906
     L R9, [ER6]
     CMP R0, #0
     BEQ __key_hit_up
@@ -366,23 +373,28 @@ __key_hit_no:
     MOV ER0, #0
     POP PC
 
-; key() -> ER0 = scan index 0..63 (8*KO bit + KI bit, MSB first) or -1
+; key() -> ER0 = scan index 0..63 (8*KO bit + KI bit) or -1
+; ML620906: quét hàng/cột từ bit thấp lên ;@906 — bản cũ quét MSB-first ;@no906
 __key:
     MOV R0, #0
     MOV R1, #0
-    MOV R2, #80H
+    MOV R2, #80H      ;@no906
+    MOV R2, #1        ;@906
 __key_x:
     ST R2, 0F046H
-    MOV R3, #80H
+    MOV R3, #80H      ;@no906
+    MOV R3, #1        ;@906
 __key_y:
     L R4, 0F040H
     AND R4, R3
     BEQ __key_f
     ADD R0, #1
-    SRL R3, #1
+    SRL R3, #1        ;@no906
+    SLL R3, #1        ;@906
     CMP R3, #0
     BNE __key_y
-    SRL R2, #1
+    SRL R2, #1        ;@no906
+    SLL R2, #1        ;@906
     CMP R2, #0
     BNE __key_x
     MOV ER0, #-1

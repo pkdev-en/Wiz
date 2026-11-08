@@ -34,7 +34,11 @@ TARGETS = {
     'cwii': Target('cwii', 'ML620909', 'template_ML620909.asm', 0x9000, 0x9000, 0x9000, 0xE000, 2),
     'cw': Target('cw', 'ML620906', 'template_ML620906.asm', 0xD000, 0xD000, 0xD000, 0xE000, 1, 0, 63, 'nX-U16/100', 1),
     # 'cwapp': a Wiz program that is patched INTO a fx-580VN X firmware ROM (free flash 0x30E40.., segment 3) - see patch_menu.py
-    'cwapp': Target('cwapp', 'ML620906', 'template_cwapp.asm', 0xD000, 0xD000, 0xD000, 0xE000, 1, 3, 63, 'nX-U16/100', 1),
+    # var_base/var_limit = 0xE820..0xEE00: vung RAM ma code OS (guest) KHONG dung
+#     khi ve menu (bien OS nam 0xD000-0xD2xx, bo dem text 0xD392+, bitmap ~0xDDxx-0xE2xx,
+#     stack OS 0xEE00+). Truoc day host nam tai 0xD000+ va BI GUEST GHI DE (nguyen nhan
+#     that su cua bug 'menu 2 do': R14/R15 ao bi xoa thanh 0 -> luoi 256x256 o).
+    'cwapp': Target('cwapp', 'ML620906', 'template_cwapp.asm', 0xD000, 0xD000, 0xE820, 0xEE00, 1, 3, 63, 'nX-U16/100', 1),
 }
 DEFAULT_TARGET = os.environ.get('WIZ_TARGET', 'cwii')
 

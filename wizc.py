@@ -20,6 +20,7 @@ yield 0/1.
 """
 import re
 import sys
+import unicodedata
 
 VAR_BASE = 0x9000
 VAR_LIMIT = 0xE000
@@ -39,7 +40,8 @@ BUILTINS = {'pixel': (2, 3), 'clear': (0, 0), 'key': (0, 0), 'delay': (1, 1),
             '_hpeek': (1, 1), '_hpoke': (2, 2),
             }
 KEYWORDS = {'def', 'if', 'elif', 'else', 'while', 'for', 'in', 'range', 'return', 'break',
-            'continue', 'pass', 'global', 'and', 'or', 'not', 'True', 'False', 'const', 'rom', 'rom8'}
+            'continue', 'pass', 'global', 'and', 'or', 'not', 'True', 'False', 'const', 'rom', 'rom8',
+            'goto', 'asm'}   # WIZ-MOD: goto/label + inline assembly
 
 # Key names -> scan index (8*KO bit + KI bit, MSB first). Values copied from libcw.h
 # (enum BUTTON / SPECIAL_CHARS, CWII). NOT yet checked by me on real hardware.
@@ -68,13 +70,20 @@ KEY_CONSTS = {
 CW_KEY_CONSTS = {
     'K_NONE': -1,
     'K_SHIFT': 56, 'K_ALPHA': 48, 'K_UP': 40, 'K_DOWN': 33, 'K_LEFT': 41, 'K_RIGHT': 32,
-    'K_MENU': 24, 'K_OPTN': 57, 'K_CALC': 49, 'K_INTEGRAL': 25, 'K_X': 17,
-    'K_FRAC': 58, 'K_SQRT': 50, 'K_SQUARED': 42, 'K_POWER': 34, 'K_LOG': 26, 'K_LN': 18,
+    'K_MENU': 39, 'K_OPTN': 57, 'K_CALC': 49, 'K_INTEGRAL': 25, 'K_X': 17,
+    # K_MENU=39: XAC NHAN tren may that (user do bang cach bam tung phim, 11/2025);
+    # ban cu 24 SAI — 24 chinh la '+'.
+    'K_FRAC': 58, 'K_SQRT': 50, 'K_SQUARED': 42, 'K_LOG': 26, 'K_LN': 18,
+    # K_POWER bi bo: tren fx-580VN X khong co phim nguan rieng, AC/ON chinh la no.
     'K_NEG': 59, 'K_DEG': 51, 'K_INV': 43, 'K_SIN': 35, 'K_COS': 27, 'K_TAN': 19,
     'K_STO': 60, 'K_ENG': 52, 'K_LPAREN': 44, 'K_RPAREN': 36, 'K_SD': 28, 'K_MPLUS': 20,
-    'K_7': 61, 'K_8': 53, 'K_9': 45, 'K_DEL': 37, 'K_AC': 29,
+    'K_7': 61, 'K_8': 53, 'K_9': 45, 'K_DEL': 37,
+    # K_AC=34: doi chieu tu ROM (0:A18A quet hang F046=10h, cot F040.2 — idiom
+    # "bam AC de ngat tinh toan" moi app deu dung). Ban cu 29 SAI (do la '+').
+    'K_AC': 34,
     'K_4': 62, 'K_5': 54, 'K_6': 46, 'K_MUL': 38, 'K_DIV': 30,
-    'K_1': 63, 'K_2': 55, 'K_3': 47, 'K_PLUS': 39, 'K_MINUS': 31,
+    'K_1': 63, 'K_2': 55, 'K_3': 47, 'K_PLUS': 24, 'K_MINUS': 31,
+    # K_PLUS=24: doi cho voi K_MENU theo xac nhan may that (24 = '+').
     'K_0': 11, 'K_DOT': 12, 'K_EXP': 13, 'K_ANS': 14, 'K_EXE': 15,
 }
 assert len(set(CW_KEY_CONSTS.values())) == len(CW_KEY_CONSTS)
@@ -1273,7 +1282,13 @@ def _rdw(a):
 def _wrw(a, v):
     poke(a, v & 255)
     poke(a + 1, (v >> 8) & 255)
-'''
+
+def peekw(a):
+    return _rdw(a)
+
+def pokew(a, v):
+    _wrw(a, v)
+'''   # WIZ-MOD: peekw/pokew - doc/ghi 16-bit tai dia chi RAM tuyet doi (port loop copy word tu firmware)
 
 PRELUDE['alloc'] = '''
 def alloc(n):
@@ -1445,6 +1460,7 @@ def f_remove(_nm):
 '''
 
 from font6x8 import FONT
+from font_vn import VN_CODE
 PRELUDE['font'] = 'rom8 _font = [' + ', '.join(str(v) for v in FONT) + ']\n'
 PRELUDE['char'] = '''
 def char(x, y, c):
@@ -1541,6 +1557,85 @@ def numz(x, y, h, w, n):
         d = d / 10
     return x
 '''
+# ---- Vietnamese: used INSTEAD of PRELUDE['char'] / ['charz'] when the program has a Vietnamese string
+# (or `const VIET = 1`). Byte codes 128..255 and 1..6 are the 134 Vietnamese letters (see font_vn.py);
+# each glyph is 13 rows = 4 rows of marks above the 8-row cell, the cell itself, 1 row below (dot).
+# The rows outside the cell are ADD-ONLY (pixels are set, never cleared) so they cannot wipe the line above.
+from font_vn import font_table, GLYPH_ROWS, OVER_ABOVE
+PRELUDE_VN = {}
+PRELUDE_VN['font_vn'] = 'rom8 _fontvn = [' + ', '.join(str(v) for v in font_table()) + ']\n'
+PRELUDE_VN['char'] = '''
+def _chvn(x, y, g):
+    base = g * 13
+    for r in range(0, 13):
+        bits = _fontvn[base + r]
+        inside = r > 3 and r < 12
+        for k in range(0, 6):
+            on = (bits & 128) != 0
+            if on or inside:
+                pixel(x + k, y + r - 4, on)
+            bits = bits + bits
+
+def char(x, y, c):
+    if c >= 128:
+        _chvn(x, y, c - 128)
+        return 0
+    if c > 0 and c < 7:
+        _chvn(x, y, c + 127)
+        return 0
+    if c < 32 or c > 126:
+        c = 63
+    base = (c - 32) * 8
+    for r in range(0, 8):
+        bits = _font[base + r]
+        for k in range(0, 6):
+            pixel(x + k, y + r, (bits & 128) != 0)
+            bits = bits + bits
+'''
+PRELUDE_VN['charz'] = '''
+def _chvnz(x, y, g, h, w):
+    base = g * 13
+    off = (4 * h + 4) / 8
+    dh = (13 * h + 7) / 8
+    for dr in range(0, dh):
+        sr = (dr * 8) / h
+        bits = _fontvn[base + sr]
+        inside = sr > 3 and sr < 12
+        for k in range(0, w):
+            on = (bits & (128 >> ((k * 6) / w))) != 0
+            if on or inside:
+                pixel(x + k, y + dr - off, on)
+
+def charz(x, y, c, h, w):
+    if c >= 128:
+        _chvnz(x, y, c - 128, h, w)
+        return 0
+    if c > 0 and c < 7:
+        _chvnz(x, y, c + 127, h, w)
+        return 0
+    if c < 32 or c > 126:
+        c = 63
+    base = (c - 32) * 8
+    sr = 0
+    er = 0
+    for r in range(0, h):
+        bits = _font[base + sr]
+        sc = 0
+        ec = 0
+        m = 128
+        for k in range(0, w):
+            pixel(x + k, y + r, (bits & m) != 0)
+            ec += 6
+            while ec >= w:
+                ec -= w
+                sc += 1
+                m = m >> 1
+        er += 8
+        while er >= h:
+            er -= h
+            sr += 1
+'''
+
 # sprite() defined in PRELUDE['sprite_rot']
 
 PRELUDE['draw'] = '''
@@ -1597,6 +1692,9 @@ ESC = {'n': 10, 't': 9, '0': 0, '\\': 92, '"': 34}
 
 
 def decode_str(lit, ln):
+    """string literal -> list of byte codes. ASCII 32..126 as is; Vietnamese letters become their one-byte code
+    (font_vn.py); the source may use precomposed (NFC) or combining (NFD) Vietnamese."""
+    lit = unicodedata.normalize('NFC', lit)
     out = []
     i = 1
     while i < len(lit) - 1:
@@ -1607,12 +1705,19 @@ def decode_str(lit, ln):
             if e not in ESC:
                 raise WizError('unknown escape \\%s in string' % e, ln)
             out.append(ESC[e])
+        elif c in VN_CODE:
+            out.append(VN_CODE[c])
         else:
             if ord(c) > 126 or ord(c) < 32:
-                raise WizError('only printable ASCII is allowed in strings', ln)
+                raise WizError('only printable ASCII and Vietnamese letters are allowed in strings (got %r)' % c, ln)
             out.append(ord(c))
         i += 1
     return out
+
+
+def has_vn(codes):
+    """True if a decoded string holds Vietnamese codes (128..255 or 1..6)"""
+    return any(b >= 128 or 1 <= b <= 6 for b in codes)
 
 
 def lex(src):
@@ -1631,6 +1736,14 @@ def lex(src):
         if not line.strip():
             continue
         ind = len(line) - len(line.lstrip(' '))
+        stripped = line.strip()
+        # WIZ-MOD: dong nhan tuyet doi "NAME:" khong lam thay doi cap indent
+        # (neu khong, lexer coi no la DEDENT va lam dut khoi len cua ham)
+        # LUU Y: phai loai tru KEYWORD (vd "else:") neu khong se pha vo if/else
+        m_lab = re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*:', stripped)
+        is_label_line = m_lab is not None and m_lab.group(0)[:-1] not in KEYWORDS
+        if is_label_line:
+            ind = indents[-1]
         if ind > indents[-1]:
             indents.append(ind)
             toks.append(('INDENT', None, ln))
@@ -1639,7 +1752,7 @@ def lex(src):
             toks.append(('DEDENT', None, ln))
             if ind > indents[-1]:
                 raise WizError('inconsistent indentation', ln)
-        pos = ind
+        pos = ind if not is_label_line else (len(line) - len(stripped))
         while pos < len(line):
             m = TOKEN_RE.match(line, pos)
             if not m:
@@ -1846,6 +1959,14 @@ class Parser:
                 else:
                     raise WizError('range takes 1-3 arguments', ln)
                 return ('for', v, start, stop, step, self.block(), ln)
+        # WIZ-MOD: nhan nguoi dung  NAME:
+        if t[0] == 'name':
+            n2 = self.t[self.i + 1]
+            if n2[0] == 'op' and n2[1] == ':':
+                self.next()
+                self.next()
+                self.expect_kind('NEWLINE')
+                return ('ulabel', t[1], ln)
         s = self.simple_stmt()
         self.expect_kind('NEWLINE')
         return s
@@ -1903,6 +2024,23 @@ class Parser:
                     self.next()
                     names.append(self.expect_kind('name')[1])
                 return ('global', names, ln)
+            # WIZ-MOD: goto + asm
+            if k == 'goto':
+                self.next()
+                nm = self.expect_kind('name')[1]
+                return ('goto', nm, ln)
+            if k == 'asm':
+                self.next()
+                parts = []
+                while self.peek()[0] == 'str':
+                    v = self.next()[1]
+                    # decode_str tra ve LIST BYTE -> chuyen nguoc thanh text asm
+                    if isinstance(v, list) and any(b > 126 or 0 < b < 7 for b in v):
+                        raise WizError('asm strings must be plain ASCII', ln)
+                    parts.append(bytes(v).decode('ascii') if isinstance(v, list) else v)
+                if not parts:
+                    raise WizError('asm expects a string literal', ln)
+                return ('iasm', '\n'.join(parts), ln)
         if t[0] == 'name':
             n = self.t[self.i + 1]
             if n[0] == 'op' and n[1] == '=' and self.t[self.i + 2][0] == 'op' and self.t[self.i + 2][1] == '[':
@@ -1969,16 +2107,26 @@ class Parser:
         return self.cmp_e()
 
     def cmp_e(self):
+        # WIZ-MOD: ho tro so sanh chuoi (a < b < c) - bien trung khong duoc goi ham
         l = self.bin_level(0)
         t = self.peek()
-        if t[0] == 'op' and t[1] in ('==', '!=', '<', '>', '<=', '>='):
-            self.next()
+        if not (t[0] == 'op' and t[1] in ('==', '!=', '<', '>', '<=', '>=')):
+            return l
+        ln = t[2]
+        chain = []
+        while self.peek()[0] == 'op' and self.peek()[1] in ('==', '!=', '<', '>', '<=', '>='):
+            op = self.next()[1]
             r = self.bin_level(0)
-            n = self.peek()
-            if n[0] == 'op' and n[1] in ('==', '!=', '<', '>', '<=', '>='):
-                raise WizError('chained comparisons are not supported', n[2])
-            return ('cmp', t[1], l, r)
-        return l
+            chain.append((op, l, r))
+            l = r
+        for _, mid, _2 in chain[1:]:
+            if Parser.has_call(mid):
+                raise WizError('chained comparison: middle expression must not contain a function call', ln)
+        out = None
+        for op, a, b in reversed(chain):
+            node = ('cmp', op, a, b)
+            out = node if out is None else ('and', out, node)
+        return out
 
     LEVELS = [('|',), ('^',), ('&',), ('<<', '>>'), ('+', '-'), ('*', '/', '%', '//')]
 
@@ -2143,7 +2291,10 @@ class Compiler:
         user_defs = {x[1] for x in prog if x[0] in ('def', 'rom', 'arr')}
         snippets = {}
         provider = {}
-        for sid, text in PRELUDE.items():
+        prelude = dict(PRELUDE)
+        if getattr(self, 'use_vn', False):
+            prelude.update(PRELUDE_VN)
+        for sid, text in prelude.items():
             if self.target.rom_seg == 0:
                 text = text.replace('_rpeek(', 'peek(')    # ROM strings/sprites live in segment 0: plain peek
             sp = Parser(lex(text), consts).program()
@@ -2281,7 +2432,13 @@ class Compiler:
 
     def compile(self, src):
         consts = dict(key_consts(self.target.name))
-        prog = Parser(lex(src), consts).program()
+        toks = lex(src)
+        # Vietnamese glyph tables (~1.7 KB) only when a string literal has Vietnamese letters (comments do not
+        # count), or the program says `const VIET = 1` (needed only when it builds Vietnamese codes by number)
+        self.use_vn = any(t[0] == 'str' and has_vn(t[1]) for t in toks)
+        prog = Parser(toks, consts).program()
+        if consts.get('VIET'):
+            self.use_vn = True
         prog = self.rewrite_draw(prog)
         self.user_defs = {x[1] for x in prog if x[0] == 'def'}
         prog = self.rewrite_print(prog, {x[1] for x in prog if x[0] in ('rom', 'arr')})
@@ -2597,6 +2754,16 @@ class Compiler:
             if not self.loops:
                 raise WizError('%s outside loop' % k, s[1])
             self.emit('B ' + (self.loops[-1][0] if k == 'break' else self.loops[-1][1]))
+        # WIZ-MOD: nhan/goto nguoi dung + inline asm
+        elif k == 'ulabel':
+            self.label('_u_%s_%s' % (self.fn or 'top', s[1]))
+        elif k == 'goto':
+            self.emit('B _u_%s_%s' % (self.fn or 'top', s[1]))
+        elif k == 'iasm':
+            for al in s[1].split('\n'):
+                al = al.strip()
+                if al and not al.startswith('#'):
+                    self.emit(al)
         else:
             raise WizError('internal: unknown statement %s' % k)
 

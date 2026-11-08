@@ -1,0 +1,12 @@
+# Chữ tiếng Việt có dấu: viết thẳng trong chuỗi (UTF-8), font Việt tự bật.
+# Dấu nhô lên tới 4 px phía trên ô chữ và 1 px phía dưới (dấu nặng),
+# nên để dòng đầu ở y >= 4 và các dòng cách nhau 12-13 px.
+def main():
+    clear()
+    text(4, 4, "Xin chào Việt Nam!")
+    print(4, 16, "ĐIỀU KHIỂN TRÒ CHƠI")
+    print(4, 28, "Điểm: ", 120)
+    print(4, 46, 16, 12, "Ắ")           # chữ cỡ 16x12 cũng có dấu (dấu nhô lên 8 px)
+    text(40, 52, "đẹp quá")
+    while True:
+        key()
