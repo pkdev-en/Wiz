@@ -8,7 +8,7 @@
 
 Write `.wz` programs and compile them into calculator-ready ROM binaries.
 
-![Version](https://img.shields.io/badge/version-0.2-blue?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-0.8-blue?style=for-the-badge)
 ![Language](https://img.shields.io/badge/language-Python-yellow?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Casio%20ClassWiz-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-TBD-lightgrey?style=for-the-badge)
