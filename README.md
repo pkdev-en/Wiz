@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# ✨ Wiz
+# Wiz
 
 **A lightweight, Python-inspired compiler for Casio ClassWiz calculators.**
 
