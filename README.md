@@ -25,6 +25,12 @@ Write `.wz` programs and compile them into calculator-ready ROM binaries.
 - 🖥️ **Built-in runtime** — graphics, keyboard input, timing and memory access.
 - 🔧 **Assembly toolkit** — integrated assembler, runtime and hardware templates.
 
+---
+## 📒 Guide
+
+
+---
+
 ## ⚡ Quick Start
 
 **Requirements:** Python 3.10+
