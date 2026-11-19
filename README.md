@@ -28,7 +28,7 @@ Write `.wz` programs and compile them into calculator-ready ROM binaries.
 ---
 ## 📒 Guide
 
-[Read->](wiz-guide.md)
+[Read->](docs/wiz-guide.md)
 
 ---
 
@@ -93,7 +93,7 @@ python3 build.py hello.wz
 
 ## 📷 Screenshot
 
-
+![hmmmm](docs\image.png)
 
 ---
 
