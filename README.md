@@ -93,7 +93,7 @@ python3 build.py hello.wz
 
 ## 📷 Screenshot
 
-![hmmmm](docs\image.png)
+![hmmmm](docs/image.png)
 
 ---
 
