@@ -82,6 +82,7 @@ python3 build.py hello.wz
 
 | File / Folder | Description |
 |---|---|
+| `docs/` | Guide |
 | `examples/` | Example Wiz programs |
 | `tests/` | Compiler tests |
 | `tools/` | Development utilities |
