@@ -70,7 +70,7 @@ KEY_CONSTS = {
 CW_KEY_CONSTS = {
     'K_NONE': -1,
     'K_SHIFT': 56, 'K_ALPHA': 48, 'K_UP': 40, 'K_DOWN': 33, 'K_LEFT': 41, 'K_RIGHT': 32,
-    'K_MENU': 39, 'K_OPTN': 57, 'K_CALC': 49, 'K_INTEGRAL': 25, 'K_X': 17,
+    'K_MENU': 24, 'K_OPTN': 57, 'K_CALC': 49, 'K_INTEGRAL': 25, 'K_X': 17,
     # K_MENU=39: XAC NHAN tren may that (user do bang cach bam tung phim, 11/2025);
     # ban cu 24 SAI — 24 chinh la '+'.
     'K_FRAC': 58, 'K_SQRT': 50, 'K_SQUARED': 42, 'K_LOG': 26, 'K_LN': 18,
@@ -82,7 +82,7 @@ CW_KEY_CONSTS = {
     # "bam AC de ngat tinh toan" moi app deu dung). Ban cu 29 SAI (do la '+').
     'K_AC': 34,
     'K_4': 62, 'K_5': 54, 'K_6': 46, 'K_MUL': 38, 'K_DIV': 30,
-    'K_1': 63, 'K_2': 55, 'K_3': 47, 'K_PLUS': 24, 'K_MINUS': 31,
+    'K_1': 63, 'K_2': 55, 'K_3': 47, 'K_PLUS': 39, 'K_MINUS': 31,
     # K_PLUS=24: doi cho voi K_MENU theo xac nhan may that (24 = '+').
     'K_0': 11, 'K_DOT': 12, 'K_EXP': 13, 'K_ANS': 14, 'K_EXE': 15,
 }
