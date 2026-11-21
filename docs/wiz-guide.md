@@ -26,7 +26,7 @@ python build.py prog.wz --target all     # Build both
 | Target | Chip | RAM | Display |
 |--------|------|-----|---------|
 | `cwii` | ML620909 | 0x9000–0xEFFF (~24KB) | 192×64, 4 grayscale levels |
-| `cw` | ML620906 | 0xD000–0xEFFF (~12KB) | 192×63, monochrome |
+| `cw` | ML620906 | 0xD000–0xEFFF (~8KB) | 192×63, monochrome |
 | `cwapp` | ML620906 | Same as `cw` | Patches into fx-580VN X firmware |
 
 ---
