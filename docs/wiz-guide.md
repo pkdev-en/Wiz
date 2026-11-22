@@ -29,6 +29,20 @@ python build.py prog.wz --target all     # Build both
 | `cw` | ML620906 | 0xD000–0xEFFF (~8KB) | 192×63, monochrome |
 | `cwapp` | ML620906 | Same as `cw` | Patches into fx-580VN X firmware |
 
+### Memory Map (ML620906 / ML620909)
+
+| Region | ML620906 (`cw`) | ML620909 (`cwii`) | Purpose |
+|--------|-----------------|-------------------|---------|
+| ROM | `0x0000–0xCFFF` × segments | `0x0000–0x8FFF` + extended | Flash / program code |
+| App RAM | `0xD000–0xEFFF` | `0x9000–0xEFFF` | Variables, stack, heap |
+| SFR `0xF0xx` | `0xF000–0xF0FF` | `0xF000–0xF0FF` | Timer0, LCD ctrl, RTC (`0xF0C0–0xF0C7`), GPIO port 0, keypad (`0xF040`, `0xF046`) |
+| SFR `0xF2xx` | `0xF220–0xF2C3` | `0xF220–0xF2C3` | GPIO port 1, SIO0, I²C0/1, motor/PWM |
+| SPSTAT | `0xF310` | `0xF310` | Solar panel status |
+| Gap | `0xF100–0xF21F`, `0xF311–0xF7FF` | (same) | No registers — reserved/unmapped |
+| LCD framebuffer | `0xF800–0xFFF7` | `0xF800–0xFFF7` | `DSPR000`–`DSPR5FF`; direct `poke` access possible |
+
+> **Warning:** `peek`/`poke` into the gap regions (`0xF100–0xF21F`, `0xF311–0xF7FF`) returns garbage or causes a hard fault — no registers are defined there in the official DCL.
+
 ---
 
 ## 2. `.wz` File Structure
