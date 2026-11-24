@@ -24,7 +24,6 @@ import unicodedata
 
 VAR_BASE = 0x9000
 VAR_LIMIT = 0xE000
-ROM_LIMIT = 0x9000
 BUILTINS = {'pixel': (2, 3), 'clear': (0, 0), 'key': (0, 0), 'delay': (1, 1),
             'peek': (1, 1), 'poke': (2, 2), '_hspan': (4, 4),
             'key_down': (1, 1), 'key_hit': (1, 1), 'buffered': (1, 1), 'flip': (0, 0),
