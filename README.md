@@ -28,7 +28,7 @@ Write `.wz` programs and compile them into calculator-ready ROM binaries.
 ---
 ## 📒 Guide
 
-[Read->](docs/wiz-guide.md)
+rewriting…
 
 ---
 
